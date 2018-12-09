@@ -80,6 +80,14 @@ class MecabController(object):
     def reading(self, expr):
         self.ensureOpen()
         expr = escapeText(expr)
+        # Protect cloze-templates of the form {{c1::<text>::<hint>}}
+        # mecab groups together series of `{` and `}` into one node, so we don't need to worry about those
+        # however, we need to strip out the label and the hint (if any), and re-attach them at the end
+        pattern = re.compile(r'\{\{(?P<label>[^:}]+)::(?P<text>[^:}]+)(?:::(?P<hint>[^:}]+))?\}\}')
+        templateLabels = (m.groupdict() for m in re.finditer(pattern, expr))
+        lastLabel = None
+        expr = re.sub(pattern, r'{{\g<text>}}', expr)
+
         self.mecab.stdin.write(expr.encode("euc-jp", "ignore") + b'\n')
         self.mecab.stdin.flush()
         expr = self.mecab.stdout.readline().rstrip(b'\r\n').decode('euc-jp')
@@ -88,6 +96,17 @@ class MecabController(object):
             if not node:
                 break
             (kanji, reading) = re.match("(.+)\[(.*)\]", node).groups()
+            # if it's a cloze group, re-add the next templateLabel
+            # using 'endswith' since the kanji could be '}}{{'
+            if kanji.startswith('}}') and lastLabel is not None:
+                # re-add the last label's hint first, if any
+                if lastLabel['hint'] is not None:
+                    out.append('::{}'.format(lastLabel['hint']))
+            if kanji.endswith('{{'):
+                out.append(kanji)
+                lastLabel = next(templateLabels)
+                out.append('{}::'.format(lastLabel['label']))
+                continue
             # hiragana, punctuation, not japanese, or lacking a reading
             if kanji == reading or not reading:
                 out.append(kanji)
